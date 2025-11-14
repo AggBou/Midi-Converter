@@ -1,0 +1,19 @@
+{
+    "name": "midi-converter",
+    "version": "1.0.0",
+    "dependencies": {
+        "core": "*",
+        "radio": "*",
+        "microphone": "*",
+        "pxt-midi": "github:microsoft/pxt-midi#v2.2.0",
+        "pxt-planetx": "github:elecfreaks/pxt-PlanetX#v1.6.1",
+        "pxt-nezha": "github:elecfreaks/pxt-nezha#v1.3.10"
+    },
+    "files": [
+        "main.ts"
+    ],
+    "testDependencies": {},
+    "supportedTargets": [
+        "microbit"
+    ]
+}

@@ -1,0 +1,32 @@
+{
+    "name": "pxt-PlanetX-AI",
+    "version": "1.0.8",
+    "description": "",
+    "dependencies": {
+        "core": "*",
+        "microphone": "*"
+    },
+    "files": [
+        "README.md",
+        "main.ts",
+        "_locales/zh-CN/pxt-PlanetX-AI-strings.json",
+        "_locales/zh-CN/pxt-PlanetX-AI-jsdoc-strings.json",
+        "_locales/ja/pxt-PlanetX-AI-strings.json",
+        "_locales/nb/pxt-PlanetX-AI-strings.json",
+        "_locales/de/pxt-PlanetX-AI-strings.json",
+        "_locales/ko/pxt-PlanetX-AI-strings.json",
+        "_locales/fr/pxt-PlanetX-AI-strings.json"
+    ],
+    "testFiles": [
+        "test.ts"
+    ],
+    "public": true,
+    "targetVersions": {
+        "target": "4.0.18",
+        "targetId": "microbit"
+    },
+    "supportedTargets": [
+        "microbit"
+    ],
+    "preferredEditor": "tsprj"
+}
