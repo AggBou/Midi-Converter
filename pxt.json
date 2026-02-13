@@ -3,8 +3,9 @@
     "version": "1.0.0",
     "dependencies": {
         "core": "*",
-        "radio": "*",
+        "radio": "",
         "microphone": "*",
+        "radio-broadcast": "*",
         "pxt-planetx": "github:elecfreaks/pxt-PlanetX#v1.6.1",
         "nezha": "github:elecfreaks/pxt-nezha#v1.3.10",
         "midi": "github:microsoft/pxt-midi#v2.2.0"

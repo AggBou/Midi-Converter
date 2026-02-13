@@ -88,8 +88,45 @@ let beatRunning = false
 let potValue = 0
 beatRunning = false
 let bpm = 0
+radio.setGroup(161)
+music.setTempo(60)
+midi.useRawSerial()
+enum RadioMessage {
+    message1 = 49434,
+    stop = 61268,
+    beat1 = 8061,
+    beat2 = 15548
+}
+function snare () {
+    neZha.setMotorSpeed(neZha.MotorList.M3, motorSpeed)
+    basic.pause(42)
+    neZha.stopMotor(neZha.MotorList.M3)
+    basic.pause(music.beat(BeatFraction.Eighth))
+    neZha.setMotorSpeed(neZha.MotorList.M3, 100)
+    basic.pause(43)
+    neZha.stopMotor(neZha.MotorList.M3)
+}
+function kick () {
+    neZha.setMotorSpeed(neZha.MotorList.M1, motorSpeed)
+    basic.pause(100)
+    neZha.stopMotor(neZha.MotorList.M1)
+    basic.pause(music.beat(BeatFraction.Eighth))
+    neZha.setMotorSpeed(neZha.MotorList.M1, 100)
+    basic.pause(102)
+    neZha.stopMotor(neZha.MotorList.M1)
+    basic.pause(music.beat(BeatFraction.Sixteenth))
+}
+function hi_hat () {
+    neZha.setMotorSpeed(neZha.MotorList.M2, motorSpeed)
+    basic.pause(45)
+    neZha.stopMotor(neZha.MotorList.M2)
+    basic.pause(music.beat(BeatFraction.Eighth))
+    neZha.setMotorSpeed(neZha.MotorList.M2, 100)
+    basic.pause(45)
+    neZha.stopMotor(neZha.MotorList.M2)
+}
 
-input.onButtonPressed(Button.AB, function on_button_pressed_ab() {
+function beat1 () {
     stopLoop = false
     while (true) {
         if (stopLoop) {
@@ -136,13 +173,30 @@ input.onButtonPressed(Button.AB, function on_button_pressed_ab() {
         wait_ms = int(max(0, round(time_ms - prev_time)))
         prev_time = time_ms
 
-        code += f"""
+        # Use premade functions for known instruments (kick, hi-hat, snare)
+        if motor in ('M1', 'M2', 'M3'):
+            if motor == 'M1':
+                func_call = 'kick()'
+            elif motor == 'M2':
+                func_call = 'hi_hat()'
+            else:
+                func_call = 'snare()'
+            code += f"""
+        // Note {note} → {motor} (velocity {velocity})
+        basic.pause({wait_ms})
+        motorSpeed = {motor_speed}
+        {func_call}
+        basic.pause(music.beat(BeatFraction.Sixteenth))
+    """
+        else:
+            code += f"""
         // Note {note} → {motor} (velocity {velocity})
         basic.pause({wait_ms})
         neZha.setMotorSpeed(neZha.MotorList.{motor}, {motor_speed})
         basic.pause({duration_ms})
         neZha.stopMotor(neZha.MotorList.{motor})
-"""
+        basic.pause(music.beat(BeatFraction.Sixteenth))
+    """
         event_count += 1
     
     if event_count == 0:
@@ -158,7 +212,19 @@ input.onButtonPressed(Button.AB, function on_button_pressed_ab() {
 
     code += """
     }
+}
+radio.onReceivedNumber(function (receivedNumber: number) {
+    if (receivedNumber == RadioMessage.beat1) {
+        if (!beatRunning) {
+            stopLoop = false
+            beat1()
+        } else {
+            beat1()
+        }
+    }
 })
+
+input.onButtonPressed(Button.A, beat1)
 
 radio.onReceivedString(function on_received_string(receivedString: string) {
     if (receivedString == "stop") {
@@ -175,10 +241,6 @@ radio.onReceivedNumber(function on_received_number(receivedBpm: number) {
     music.setTempo(receivedBpm)
     motorSpeed = Math.map(receivedBpm, 40, 100, -80, -100)
 })
-
-radio.setGroup(161)
-music.setTempo(60)
-midi.useRawSerial()
 
 // Crash sensors with MIDI
 basic.forever(function on_forever() {
