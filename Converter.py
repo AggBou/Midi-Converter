@@ -97,13 +97,14 @@ enum RadioMessage {
     beat1 = 8061,
     beat2 = 15548
 }
+
 function snare () {
     neZha.setMotorSpeed(neZha.MotorList.M3, motorSpeed)
-    basic.pause(42)
+    basic.pause(40)
     neZha.stopMotor(neZha.MotorList.M3)
     basic.pause(music.beat(BeatFraction.Eighth))
     neZha.setMotorSpeed(neZha.MotorList.M3, 100)
-    basic.pause(43)
+    basic.pause(41)
     neZha.stopMotor(neZha.MotorList.M3)
 }
 function kick () {
@@ -114,15 +115,15 @@ function kick () {
     neZha.setMotorSpeed(neZha.MotorList.M1, 100)
     basic.pause(102)
     neZha.stopMotor(neZha.MotorList.M1)
-    basic.pause(music.beat(BeatFraction.Sixteenth))
 }
+
 function hi_hat () {
     neZha.setMotorSpeed(neZha.MotorList.M2, motorSpeed)
-    basic.pause(45)
+    basic.pause(40)
     neZha.stopMotor(neZha.MotorList.M2)
     basic.pause(music.beat(BeatFraction.Eighth))
     neZha.setMotorSpeed(neZha.MotorList.M2, 100)
-    basic.pause(45)
+    basic.pause(40)
     neZha.stopMotor(neZha.MotorList.M2)
 }
 
@@ -166,6 +167,10 @@ function beat1 () {
             continue
 
         # Map velocity to motor speed (0-100) applying velocity scale
+        # We compute a positive motor_speed from velocity, then negate
+        # when writing it into the generated `beat1` code so the
+        # generated assignment values are the exact negative of the
+        # MIDI-derived value.
         motor_speed = int(max(0, min(100, round((velocity / 127.0) * 100 * vel_scale))))
         # Map velocity to a short duration (ms) the motor runs and apply duration scale
         duration_ms = int(max(20, round((50 + (velocity / 127.0) * 250) * dur_scale)))
@@ -184,7 +189,7 @@ function beat1 () {
             code += f"""
         // Note {note} → {motor} (velocity {velocity})
         basic.pause({wait_ms})
-        motorSpeed = {motor_speed}
+        motorSpeed = -{motor_speed}
         {func_call}
         basic.pause(music.beat(BeatFraction.Sixteenth))
     """
@@ -192,7 +197,7 @@ function beat1 () {
             code += f"""
         // Note {note} → {motor} (velocity {velocity})
         basic.pause({wait_ms})
-        neZha.setMotorSpeed(neZha.MotorList.{motor}, {motor_speed})
+        neZha.setMotorSpeed(neZha.MotorList.{motor}, -{motor_speed})
         basic.pause({duration_ms})
         neZha.stopMotor(neZha.MotorList.{motor})
         basic.pause(music.beat(BeatFraction.Sixteenth))
@@ -213,37 +218,41 @@ function beat1 () {
     code += """
     }
 }
-radio.onReceivedNumber(function (receivedNumber: number) {
-    if (receivedNumber == RadioMessage.beat1) {
-        if (!beatRunning) {
-            stopLoop = false
-            beat1()
-        } else {
-            beat1()
-        }
+// === Button handlers (local) ===
+input.onButtonPressed(Button.A, function () {
+    beat1()
+})
+radio.onReceivedMessage(RadioMessage.beat1, function () {
+    if (beatRunning == false) {
+        stopLoop = false
+        beat1()
+    } else {
+        beat1()
     }
 })
-
-input.onButtonPressed(Button.A, beat1)
-
-radio.onReceivedString(function on_received_string(receivedString: string) {
-    if (receivedString == "stop") {
-        stopLoop = true
+radio.onReceivedMessage(RadioMessage.beat2, function () {
+    if (beatRunning == false) {
+        stopLoop = false
+        beat1()
     }
 })
-
-input.onButtonPressed(Button.B, function on_button_pressed_b() {
+input.onButtonPressed(Button.B, function () {
     stopLoop = true
-    basic.showString("Stopped")
+    basic.showString("Stop")
 })
-
-radio.onReceivedNumber(function on_received_number(receivedBpm: number) {
+radio.onReceivedNumber(function (receivedBpm) {
     music.setTempo(receivedBpm)
     motorSpeed = Math.map(receivedBpm, 40, 100, -80, -100)
 })
-
-// Crash sensors with MIDI
-basic.forever(function on_forever() {
+radio.onReceivedMessage(RadioMessage.stop, function () {
+    if (beatRunning == true) {
+        stopLoop = true
+    } else {
+        basic.showString("No beat")
+    }
+})
+// === Crash/MIDI loops ===
+basic.forever(function () {
     if (PlanetX_Basic.Crash(PlanetX_Basic.DigitalRJPin.J1)) {
         midi.toneOn(65.41)
         basic.pause(music.beat(BeatFraction.Sixteenth))
@@ -251,8 +260,7 @@ basic.forever(function on_forever() {
         basic.pause(music.beat(BeatFraction.Eighth))
     }
 })
-
-basic.forever(function on_forever2() {
+basic.forever(function () {
     if (PlanetX_Basic.Crash(PlanetX_Basic.DigitalRJPin.J3)) {
         midi.toneOn(92.5)
         basic.pause(music.beat(BeatFraction.Sixteenth))
@@ -260,8 +268,7 @@ basic.forever(function on_forever2() {
         basic.pause(music.beat(BeatFraction.Eighth))
     }
 })
-
-basic.forever(function on_forever3() {
+basic.forever(function () {
     if (PlanetX_Basic.Crash(PlanetX_Basic.DigitalRJPin.J2)) {
         midi.toneOn(73.42)
         basic.pause(music.beat(BeatFraction.Sixteenth))
