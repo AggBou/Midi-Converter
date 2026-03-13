@@ -1,0 +1,12 @@
+path: dataset
+
+train: images/train
+val: images/val
+
+names: ['kick', 'snare', 'hihat']
+
+nc: 3
+
+# Recommended: use a list for `names` and include `nc` (number of classes).
+# Example alternative format:
+# names: ['kick', 'snare', 'hihat']

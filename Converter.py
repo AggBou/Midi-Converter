@@ -6,6 +6,12 @@ import asyncio
 from mido import MidiFile, merge_tracks, tick2second
 import flet as ft
 import traceback
+import threading
+import time
+try:
+    import winsound
+except Exception:
+    winsound = None
 import json
 # Use tkinter file dialogs as a stable desktop fallback instead of ft.FilePicker
 try:
@@ -28,6 +34,11 @@ DEFAULT_CONFIG = {
     'midi_to_motor': MIDI_TO_MOTOR,
     'velocity_scale': 1.0,
     'duration_scale': 1.0,
+    'note_to_sample': {
+        '36': 'sounds/kick.wav',
+        '38': 'sounds/snare.wav',
+        '42': 'sounds/hihat.wav'
+    },
     'auto_npm': True
 }
 
@@ -348,6 +359,11 @@ class MidiConverterApp:
             "Deploy to micro:bit",
             on_click=self.deploy_to_microbit
         )
+        # Play using samples from sounds/ folder (default)
+        self.play_button = ft.Button("Play MIDI (samples)", on_click=self.play_midi_using_sounds)
+        self.loop_checkbox = ft.Checkbox(label="Loop playback", value=False)
+        self.playing = False
+        self.stop_playback = False
 
         # We'll use a desktop file dialog fallback (tkinter) instead of
         # ft.FilePicker because some flet builds don't include that control.
@@ -360,7 +376,7 @@ class MidiConverterApp:
         # Build layout
         # Build layout
         button_row = ft.Row(
-            [self.load_button, self.save_button, self.compile_button, self.deploy_button],
+            [self.load_button, self.save_button, self.compile_button, self.deploy_button, self.loop_checkbox, self.play_button],
             spacing=10
         )
         
@@ -444,6 +460,18 @@ class MidiConverterApp:
             self.text_area.value = generated_code
             self.status_label.value = f"Loaded: {midi_path}"
             self.current_midi_path = midi_path
+            # Enable or disable playback depending on whether we have samples
+            try:
+                if self._has_samples_for_midi(midi):
+                    self.play_button.disabled = False
+                    self.status_label.value += " — samples available for playback"
+                else:
+                    self.play_button.disabled = True
+                    self.status_label.value += " — no matching samples in sounds/"
+            except Exception:
+                # On unexpected error leave the button enabled so user can still try
+                self.play_button.disabled = False
+
             self.page.update()
         except Exception as e:
             tb = traceback.format_exc()
@@ -491,6 +519,198 @@ class MidiConverterApp:
             self.page.update()
         except Exception as e:
             self.show_alert("Error", f"Failed to save file:\n{e}")
+
+    def _find_sample_for_note(self, note: int) -> str | None:
+        """Return a filesystem path to a sample for the given MIDI note, or None."""
+        cfg = load_config()
+        mapping = cfg.get('note_to_sample', {}) or {}
+
+        # Try explicit mapping (string keys expected in config)
+        candidate = None
+        if str(note) in mapping:
+            candidate = mapping[str(note)]
+        elif note in mapping:
+            candidate = mapping[note]
+
+        # If candidate was provided, resolve relative paths
+        if candidate:
+            if not os.path.isabs(candidate):
+                cand_path = os.path.join(os.getcwd(), candidate)
+            else:
+                cand_path = candidate
+            if os.path.exists(cand_path):
+                return cand_path
+
+        # Try common filename patterns in sounds/ directory
+        sounds_dir = os.path.join(os.getcwd(), 'sounds')
+        for ext in ('.wav',):
+            candidate_path = os.path.join(sounds_dir, f"{note}{ext}")
+            if os.path.exists(candidate_path):
+                return candidate_path
+
+        # As a last resort, look up default mapping in DEFAULT_CONFIG (already relative)
+        try:
+            default_map = DEFAULT_CONFIG.get('note_to_sample', {})
+            if str(note) in default_map:
+                p = default_map[str(note)]
+                p_abs = p if os.path.isabs(p) else os.path.join(os.getcwd(), p)
+                if os.path.exists(p_abs):
+                    return p_abs
+        except Exception:
+            pass
+
+        return None
+
+    def _play_sample(self, path: str) -> None:
+        """Play a single sample file asynchronously (best-effort)."""
+        if not path or not os.path.exists(path):
+            return
+        # Prefer playsound3 (or playsound) if available; run in thread to avoid blocking
+        try:
+            try:
+                from playsound3 import playsound as _playsound
+            except Exception:
+                from playsound import playsound as _playsound
+            threading.Thread(target=_playsound, args=(path,), daemon=True).start()
+            return
+        except Exception:
+            pass
+
+        # Fallback: winsound on Windows (async)
+        try:
+            if winsound is not None:
+                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                return
+        except Exception:
+            pass
+
+        # Fallback: try simpleaudio if available
+        try:
+            import simpleaudio as sa
+            wave_obj = sa.WaveObject.from_wave_file(path)
+            wave_obj.play()
+            return
+        except Exception:
+            pass
+
+        # If nothing else, attempt a blocking play via system call for WAV on Windows
+        try:
+            if os.name == 'nt':
+                import subprocess
+                subprocess.Popen(['powershell', '-c', f'(New-Object Media.SoundPlayer "{path}").PlaySync()'])
+        except Exception:
+            pass
+
+    def _has_samples_for_midi(self, midi: MidiFile) -> bool:
+        """Return True if at least one note in the MIDI has a corresponding sample."""
+        try:
+            for msg in merge_tracks(midi.tracks):
+                if msg.type == 'note_on' and getattr(msg, 'velocity', 0) > 0:
+                    if self._find_sample_for_note(msg.note):
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def _play_midi_thread(self, midi_path: str):
+        """Thread target: play MIDI by triggering samples from sounds/ folder."""
+        try:
+            midi = MidiFile(midi_path)
+        except Exception as e:
+            self.status_label.value = f"Failed to open MIDI: {e}"
+            self.page.update()
+            self.play_button.disabled = False
+            self.page.update()
+            return
+
+        ticks_per_beat = midi.ticks_per_beat
+        tempo = 500000
+
+        self.status_label.value = f"Playing: {os.path.basename(midi_path)}"
+        self.page.update()
+
+        # Loop playback while loop checkbox is enabled and stop_playback is False
+        try:
+            while True:
+                for msg in merge_tracks(midi.tracks):
+                    if self.stop_playback:
+                        break
+
+                    # Convert delta ticks to seconds using current tempo
+                    try:
+                        dt = tick2second(msg.time, ticks_per_beat, tempo)
+                    except Exception:
+                        dt = 0
+                    if dt > 0:
+                        time.sleep(dt)
+
+                    if msg.type == 'set_tempo':
+                        tempo = msg.tempo
+                        continue
+
+                    if msg.type == 'note_on' and getattr(msg, 'velocity', 0) > 0:
+                        sample = self._find_sample_for_note(msg.note)
+                        if sample:
+                            try:
+                                self._play_sample(sample)
+                            except Exception:
+                                pass
+
+                if self.stop_playback:
+                    break
+
+                # If loop checkbox is not checked, finish after one pass
+                if not getattr(self, 'loop_checkbox', None) or not self.loop_checkbox.value:
+                    break
+
+                # Small gap between loops
+                time.sleep(0.01)
+        finally:
+            self.stop_playback = False
+            self.playing = False
+            try:
+                self.play_button.text = "Play MIDI (samples)"
+                self.play_button.disabled = False
+                self.page.update()
+            except Exception:
+                pass
+
+    def play_midi_using_sounds(self, e):
+        """UI handler: start playing current MIDI using samples in sounds/"""
+        if not self.current_midi_path:
+            self.show_alert("Info", "No MIDI file loaded. Please load a file first.")
+            return
+        # If already playing, request stop and return (thread will re-enable UI)
+        if self.playing:
+            self.stop_playback = True
+            try:
+                self.play_button.text = "Play MIDI (samples)"
+                self.page.update()
+            except Exception:
+                pass
+            return
+
+        # Double-check samples exist for the loaded MIDI before starting
+        try:
+            midi = MidiFile(self.current_midi_path)
+            if not self._has_samples_for_midi(midi):
+                self.show_alert("Info", "No matching samples found in sounds/ for this MIDI.")
+                return
+        except Exception:
+            pass
+
+        # Start playback: disable toggles to prevent double-start
+        self.play_button.disabled = True
+        self.stop_playback = False
+        self.playing = True
+        try:
+            self.play_button.text = "Stop Playback"
+            self.page.update()
+        except Exception:
+            pass
+
+        t = threading.Thread(target=self._play_midi_thread, args=(self.current_midi_path,), daemon=True)
+        t.start()
 
     async def run_mkc_async(self, save_dir: str, args: list, operation: str):
         """Run mkc asynchronously and show output"""
