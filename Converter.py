@@ -62,20 +62,21 @@ def generate_motor_code(midi_file: MidiFile) -> str:
     maps notes to motors, maps velocity to motor speed, and inserts pauses
     between events so the generated TypeScript follows the MIDI timing.
     """
-    # Collect all notes with absolute timing in milliseconds
+    # Collect all notes with absolute timing in ticks (so we can express
+    # waits as beat fractions independent of fixed milliseconds). We keep
+    # tempo handling for completeness but compute beats from ticks.
     notes = []
     ticks_per_beat = midi_file.ticks_per_beat
-    tempo = 500000  # default microseconds per beat
-    abs_ms = 0.0
+    tempo = 500000  # default microseconds per beat (not needed for beats)
+    abs_ticks = 0.0
 
     for msg in merge_tracks(midi_file.tracks):
         # msg.time is in ticks since previous message
-        delta_ms = tick2second(msg.time, ticks_per_beat, tempo) * 1000.0
-        abs_ms += delta_ms
+        abs_ticks += msg.time
         if msg.type == 'set_tempo':
             tempo = msg.tempo
         if msg.type == 'note_on' and getattr(msg, 'velocity', 0) > 0:
-            notes.append((abs_ms, msg.note, msg.velocity))
+            notes.append((abs_ticks, msg.note, msg.velocity))
 
     # Sort by absolute time (should already be in order, but be safe)
     notes.sort(key=lambda x: x[0])
@@ -87,7 +88,7 @@ let stopLoop = false
 let beatRunning = false
 let potValue = 0
 beatRunning = false
-let bpm = 0
+let bpm = 60
 radio.setGroup(161)
 music.setTempo(60)
 midi.useRawSerial()
@@ -147,13 +148,18 @@ function beat1 () {
     except Exception:
         dur_scale = 1.0
 
-    # Build motor events using relative waits (basic.pause(ms)) and
-    # map velocity (0-127) -> motor speed (0-100) and duration
+    # Build motor events using relative waits expressed in beats so that
+    # at runtime the pause durations are computed from the current `bpm`
+    # (for example read from a trimpot) and thus are relative to the
+    # current tempo.
     prev_time = 0.0
     event_count = 0
     unmapped_notes = set()
 
     for time_ms, note, velocity in notes:
+        # time_ms here actually holds absolute ticks (rename for clarity)
+        time_ticks = time_ms
+
         # Resolve motor mapping allowing numeric or string keys
         motor = None
         # Try int first, then string
@@ -174,9 +180,25 @@ function beat1 () {
         motor_speed = int(max(0, min(100, round((velocity / 127.0) * 100 * vel_scale))))
         # Map velocity to a short duration (ms) the motor runs and apply duration scale
         duration_ms = int(max(20, round((50 + (velocity / 127.0) * 250) * dur_scale)))
-        # Time to wait before this event
-        wait_ms = int(max(0, round(time_ms - prev_time)))
-        prev_time = time_ms
+        # Time to wait before this event, expressed in beats
+        wait_ticks = max(0.0, float(time_ticks - prev_time))
+        wait_beats = wait_ticks / float(ticks_per_beat)
+        prev_time = time_ticks
+
+        # Convert wait in beats into a count of sixteenth notes, then
+        # express as the largest BeatFraction with an integer multiplier
+        # (Whole=16, Half=8, Quarter=4, Eighth=2, Sixteenth=1).
+        wait_sixteenth = int(round(wait_beats * 16))
+        pause_code = ""
+        if wait_sixteenth > 0:
+            for fname, fval in (('Whole', 16), ('Half', 8), ('Quarter', 4), ('Eighth', 2), ('Sixteenth', 1)):
+                if wait_sixteenth % fval == 0:
+                    mult = wait_sixteenth // fval
+                    if mult == 1:
+                        pause_code = f"basic.pause(music.beat(BeatFraction.{fname}))"
+                    else:
+                        pause_code = f"basic.pause(music.beat(BeatFraction.{fname}) * {mult})"
+                    break
 
         # Use premade functions for known instruments (kick, hi-hat, snare)
         if motor in ('M1', 'M2', 'M3'):
@@ -188,7 +210,7 @@ function beat1 () {
                 func_call = 'snare()'
             code += f"""
         // Note {note} → {motor} (velocity {velocity})
-        basic.pause({wait_ms})
+        basic.pause(Math.max(1, Math.round({wait_beats:.6f} * music.beat(BeatFraction.Whole))))
         motorSpeed = -{motor_speed}
         {func_call}
         basic.pause(music.beat(BeatFraction.Sixteenth))
@@ -196,7 +218,7 @@ function beat1 () {
         else:
             code += f"""
         // Note {note} → {motor} (velocity {velocity})
-        basic.pause({wait_ms})
+        basic.pause(Math.max(1, Math.round({wait_beats:.6f} * music.beat(BeatFraction.Whole))))
         neZha.setMotorSpeed(neZha.MotorList.{motor}, -{motor_speed})
         basic.pause({duration_ms})
         neZha.stopMotor(neZha.MotorList.{motor})
@@ -241,6 +263,7 @@ input.onButtonPressed(Button.B, function () {
     basic.showString("Stop")
 })
 radio.onReceivedNumber(function (receivedBpm) {
+    bpm = receivedBpm
     music.setTempo(receivedBpm)
     motorSpeed = Math.map(receivedBpm, 40, 100, -80, -100)
 })
